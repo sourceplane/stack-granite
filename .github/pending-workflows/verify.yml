@@ -1,0 +1,39 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  verify-stack:
+    name: Verify stack catalog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Orun
+        uses: sourceplane/orun-action@v1.1.0
+
+      - name: Make helper scripts executable
+        run: chmod +x scripts/*.sh
+
+      # Structurally validates every composition contract, resolves the publish
+      # target, then packs the shipped layers and resolves them back through a
+      # throwaway consumer intent — the same path a consuming repo runs.
+      - name: Verify catalog
+        run: ./scripts/verify.sh
