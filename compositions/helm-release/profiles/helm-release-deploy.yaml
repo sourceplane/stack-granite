@@ -1,0 +1,25 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: helm-release-deploy
+spec:
+  description: Render, validate, diff, roll and verify a release on a live cluster
+
+  policies:
+    requireCleanGitTree: true
+
+  jobs:
+    release:
+      includeCapabilities:
+        - helm-release.setup
+        - helm-release.oidc
+        - helm-release.kubeconfig
+        - helm-release.lint
+        - helm-release.template
+        # The same schema validation the lint lane runs. A deploy lane that
+        # skips it would let a manifest that no PR ever rendered reach a
+        # cluster.
+        - helm-release.validate
+        - helm-release.diff
+        - helm-release.upgrade
+        - helm-release.rollout

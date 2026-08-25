@@ -1,0 +1,166 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: JobTemplate
+metadata:
+  name: terraform-aws-run
+spec:
+  description: Terraform fmt, init, validate, plan and apply for an AWS root
+  runsOn: ubuntu-22.04
+  timeout: 45m
+  retries: 0
+
+  labels:
+    scope: infra
+
+  capabilities:
+    - terraform-aws.setup
+    - terraform-aws.oidc
+    - terraform-aws.env
+    - terraform-aws.context
+    - terraform-aws.fmt
+    - terraform-aws.init-offline
+    - terraform-aws.init
+    - terraform-aws.validate
+    - terraform-aws.plan
+    - terraform-aws.apply
+
+  steps:
+    - id: setup-terraform
+      name: setup-terraform
+      capability: terraform-aws.setup
+      use: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: "{{ .parameters.terraformVersion }}"
+        terraform_wrapper: "false"
+
+    # Credentials are assumed, never stored. The role is created and owned by
+    # the aws-admin repo and trusts repo:<owner>/<repo>:* through the account's
+    # shared GitHub OIDC provider. Lanes that carry no awsRoleArn skip this
+    # step entirely and therefore cannot reach AWS at all — that is the
+    # property the validate profile depends on, not merely a convention.
+    - id: assume-aws-role
+      name: assume-aws-role
+      capability: terraform-aws.oidc
+      use: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: "{{ .parameters.awsRoleArn }}"
+        aws-region: "{{ .parameters.awsRegion }}"
+        role-session-name: "orun-{{ .orun.component.name }}-{{ .orun.environment.name }}"
+
+    - id: terraform-env
+      name: Export Terraform Env
+      capability: terraform-aws.env
+      shell: bash
+      run: |
+        {
+          {{- range $key, $value := .env }}
+          printf '%s=%s\n' '{{ $key }}' '{{ $value }}'
+          {{- end }}
+
+          {{- range $key, $value := .parameters }}
+          printf 'TF_VAR_{{ $key }}=%s\n' '{{ $value }}'
+          {{- end }}
+
+          printf 'TF_VAR_environment=%s\n' "{{ .orun.environment.name }}"
+          printf 'TF_VAR_component=%s\n' "{{ .orun.component.name }}"
+          printf 'TF_IN_AUTOMATION=1\n'
+          printf 'TF_INPUT=0\n'
+        } >> "$ORUN_ENV"
+      onFailure: stop
+
+    - id: terraform-context
+      name: Terraform Context
+      capability: terraform-aws.context
+      shell: bash
+      run: |
+        terraform version
+        echo "Component:   {{ .orun.component.name }}"
+        echo "Environment: {{ .orun.environment.name }}"
+        echo "Root:        {{ .parameters.terraformDir }}"
+        echo "Region:      {{ .parameters.awsRegion }}"
+      onFailure: stop
+
+    - id: terraform-fmt-check
+      name: fmt Check
+      capability: terraform-aws.fmt
+      run: "terraform -chdir={{ .parameters.terraformDir }} fmt -check -recursive"
+      onFailure: stop
+
+    # The offline init is what makes a validate lane possible without an AWS
+    # account or a state backend: providers and modules are still downloaded
+    # and their schemas still typecheck the configuration, but no backend is
+    # configured, so nothing is read from or written to remote state.
+    - id: terraform-init-offline
+      name: Init (no backend)
+      capability: terraform-aws.init-offline
+      shell: bash
+      run: |
+        set -euo pipefail
+        terraform -chdir={{ .parameters.terraformDir }} init \
+          -input=false \
+          -backend=false
+      onFailure: stop
+
+    # State lives on the platform: the runner exports TF_HTTP_* per job
+    # (address = …/state/tfstate/{component}/{env}, run token as password), so
+    # `backend "http"` needs no -backend-config and no AWS credentials for
+    # state. The environment is IN the address — no terraform workspaces, and
+    # no S3 bucket to bootstrap before the first apply can run.
+    - id: terraform-init
+      name: Init
+      capability: terraform-aws.init
+      shell: bash
+      run: |
+        set -euo pipefail
+        terraform -chdir={{ .parameters.terraformDir }} init \
+          -input=false \
+          -reconfigure
+      onFailure: stop
+
+    - id: terraform-validate
+      name: Validate
+      capability: terraform-aws.validate
+      run: "terraform -chdir={{ .parameters.terraformDir }} validate -no-color"
+      onFailure: stop
+
+    - id: terraform-plan
+      name: Plan
+      capability: terraform-aws.plan
+      shell: bash
+      run: |
+        set -euo pipefail
+        terraform -chdir={{ .parameters.terraformDir }} plan \
+          -no-color \
+          -input=false \
+          -lock-timeout=5m \
+          -out=tfplan
+      onFailure: stop
+
+    # The declared outputs are appended to the runner's secret-outputs sink
+    # INSIDE the apply step — no extra sync step, no CLI, no second auth. The
+    # RUNNER publishes them post-success over the run's lease-bound channel and
+    # the platform derives the target scope from the leased job itself.
+    # secretOutputs: "KEY=output,KEY2=output2".
+    - id: terraform-apply
+      name: Apply
+      capability: terraform-aws.apply
+      shell: bash
+      run: |
+        set -euo pipefail
+        terraform -chdir={{ .parameters.terraformDir }} apply \
+          -no-color \
+          -input=false \
+          -lock-timeout=5m \
+          -auto-approve tfplan
+        {{- if .parameters.secretOutputs }}
+        for pair in $(echo "{{ .parameters.secretOutputs }}" | tr ',' ' '); do
+          key="${pair%%=*}"
+          output="${pair#*=}"
+          {
+            printf '%s<<__ORUN_EOF__\n' "$key"
+            terraform -chdir={{ .parameters.terraformDir }} output -raw "$output"
+            printf '\n__ORUN_EOF__\n'
+          } >> "${ORUN_SECRET_OUTPUTS:?runner did not provide the secret-outputs sink}"
+          echo "queued secret output $key ← output/$output"
+        done
+        {{- end }}
+      onFailure: stop

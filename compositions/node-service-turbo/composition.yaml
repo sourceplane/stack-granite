@@ -1,0 +1,29 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: Composition
+metadata:
+  name: node-service-turbo
+spec:
+  type: node-service-turbo
+  description: Install, typecheck, lint, test and build one service in a pnpm/Turborepo workspace
+
+  schemaRef:
+    name: node-service-turbo-component
+
+  defaultJob: verify
+  defaultProfile: verify
+
+  jobs:
+    - name: verify
+      templateRef:
+        name: node-service-turbo-verify
+
+  profiles:
+    - name: quick-check
+      profileRef:
+        name: node-service-turbo-quick-check
+    - name: verify
+      profileRef:
+        name: node-service-turbo-verify
+    - name: smoke
+      profileRef:
+        name: node-service-turbo-smoke

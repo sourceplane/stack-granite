@@ -1,0 +1,52 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ComponentSchema
+metadata:
+  name: node-service-turbo-component
+spec:
+  type: node-service-turbo
+  schema:
+    $schema: http://json-schema.org/draft-07/schema#
+    title: Node Service (Turborepo) Component
+    type: object
+    required:
+      - name
+      - type
+      - parameters
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+        const: node-service-turbo
+      parameters:
+        type: object
+        required:
+          - nodeVersion
+          - pnpmVersion
+          - turboFilter
+        properties:
+          nodeVersion:
+            type: string
+          pnpmVersion:
+            type: string
+          turboFilter:
+            type: string
+            description: Turborepo filter selecting this service's workspace package (e.g. "@cumulus/documents-service").
+          installCommand:
+            type: string
+          typecheckCommand:
+            type: string
+          lintCommand:
+            type: string
+          testCommand:
+            type: string
+          buildCommand:
+            type: string
+          smokeComposeFile:
+            type: string
+            description: docker-compose file standing up the service and its local dependency doubles for the smoke lane.
+          smokeCommand:
+            type: string
+            description: Command run against the composed stack. Non-empty enables the smoke lane.
+        additionalProperties: true
+    additionalProperties: true

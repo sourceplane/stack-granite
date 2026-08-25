@@ -1,0 +1,21 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: node-service-turbo-smoke
+spec:
+  description: >-
+    Everything the verify profile runs, plus a docker-compose smoke test against
+    local dependency doubles. Still credential-free.
+
+  jobs:
+    verify:
+      includeCapabilities:
+        - node-service-turbo.setup-pnpm
+        - node-service-turbo.setup-node
+        - node-service-turbo.install
+        - node-service-turbo.verify-structure
+        - node-service-turbo.typecheck
+        - node-service-turbo.lint
+        - node-service-turbo.test
+        - node-service-turbo.build
+        - node-service-turbo.smoke

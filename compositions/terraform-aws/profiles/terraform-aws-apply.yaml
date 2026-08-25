@@ -1,0 +1,28 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: terraform-aws-apply
+spec:
+  description: Plan and apply an AWS root, publishing declared outputs to the environment rung
+
+  policies:
+    requireCleanGitTree: true
+
+  secretBindings:
+    AWS_ACCOUNT_ID: { required: false }
+
+  jobs:
+    terraform:
+      includeCapabilities:
+        - terraform-aws.setup
+        - terraform-aws.oidc
+        - terraform-aws.env
+        - terraform-aws.context
+        - terraform-aws.fmt
+        - terraform-aws.init
+        - terraform-aws.validate
+        # apply consumes the saved plan file this step writes. Applying a
+        # freshly-computed plan instead would let the world change between the
+        # plan a human read and the apply that ran.
+        - terraform-aws.plan
+        - terraform-aws.apply

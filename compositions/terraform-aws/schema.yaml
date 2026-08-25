@@ -1,0 +1,70 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ComponentSchema
+metadata:
+  name: terraform-aws-component
+spec:
+  type: terraform-aws
+  schema:
+    $schema: http://json-schema.org/draft-07/schema#
+    title: Terraform AWS Component
+    type: object
+    required:
+      - name
+      - type
+      - parameters
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+        const: terraform-aws
+      parameters:
+        type: object
+        required:
+          - stackName
+          - terraformDir
+          - terraformVersion
+        properties:
+          stackName:
+            type: string
+            description: Logical name of this Terraform root; used in the state address and log context.
+          terraformDir:
+            type: string
+            description: Path to the Terraform root, relative to the component directory.
+          terraformVersion:
+            type: string
+            description: Exact Terraform version to install (no ranges — a range makes the lane non-reproducible).
+          awsRegion:
+            type: string
+            description: Region passed to the provider as AWS_REGION and TF_VAR_awsRegion.
+          awsRoleArn:
+            type: string
+            description: >-
+              IAM role assumed via GitHub OIDC before any credentialed step.
+              Empty in the validate lane, which never authenticates. Owned by
+              the aws-admin repo, never created here.
+          lane:
+            type: string
+            description: Free-form lane label surfaced to Terraform as TF_VAR_lane (verify / deploy).
+          namespace:
+            type: string
+          namespacePrefix:
+            type: string
+            description: Prefix applied to every named AWS resource so environments cannot collide in one account.
+          orgName:
+            type: string
+          owner:
+            type: string
+          repo:
+            type: string
+          secretOutputs:
+            type: string
+            description: >-
+              Comma-separated KEY=output pairs. After a successful apply each
+              named terraform output is queued on the runner's secret-outputs
+              sink and PUBLISHED over the run's lease-bound channel onto the
+              project/env rung. Downstream components read the same keys through
+              secretEnv — no cross-state data sources, no Secrets Manager, no
+              bootstrap ordering puzzle.
+        additionalProperties: true
+    additionalProperties: true

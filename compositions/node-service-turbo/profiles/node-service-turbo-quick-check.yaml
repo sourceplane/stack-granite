@@ -1,0 +1,15 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: node-service-turbo-quick-check
+spec:
+  description: Install and structural checks only — the cheapest signal that a change is coherent.
+
+  jobs:
+    verify:
+      includeCapabilities:
+        - node-service-turbo.setup-pnpm
+        - node-service-turbo.setup-node
+        - node-service-turbo.install
+        - node-service-turbo.verify-structure
+        - node-service-turbo.typecheck

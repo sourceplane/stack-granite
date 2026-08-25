@@ -1,0 +1,16 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: container-image-verify
+spec:
+  description: >-
+    Build and scan without authenticating or pushing. Proves the Dockerfile
+    builds and the result is clean; produces no artifact anyone can deploy.
+
+  jobs:
+    image:
+      includeCapabilities:
+        - container-image.setup-buildx
+        - container-image.tag
+        - container-image.build
+        - container-image.scan

@@ -1,0 +1,206 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: JobTemplate
+metadata:
+  name: helm-release-run
+spec:
+  description: helm lint, template, kubeconform, upgrade --install, and rollout verification
+  runsOn: ubuntu-22.04
+  timeout: 30m
+  retries: 0
+
+  labels:
+    scope: delivery
+
+  capabilities:
+    - helm-release.setup
+    - helm-release.oidc
+    - helm-release.kubeconfig
+    - helm-release.lint
+    - helm-release.template
+    - helm-release.validate
+    - helm-release.diff
+    - helm-release.upgrade
+    - helm-release.rollout
+
+  steps:
+    - id: setup-helm
+      name: setup-helm
+      capability: helm-release.setup
+      use: azure/setup-helm@v4
+      with:
+        version: "{{ .parameters.helmVersion }}"
+
+    - id: assume-aws-role
+      name: assume-aws-role
+      capability: helm-release.oidc
+      use: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: "{{ .parameters.awsRoleArn }}"
+        aws-region: "{{ .parameters.awsRegion }}"
+        role-session-name: "orun-helm-{{ .orun.component.name }}-{{ .orun.environment.name }}"
+
+    - id: kubeconfig
+      name: kubeconfig
+      capability: helm-release.kubeconfig
+      shell: bash
+      run: |
+        set -euo pipefail
+        aws eks update-kubeconfig \
+          --name "{{ .parameters.clusterName }}" \
+          --region "{{ .parameters.awsRegion }}"
+        kubectl version --output=yaml | head -20
+      onFailure: stop
+
+    - id: helm-lint
+      name: helm-lint
+      capability: helm-release.lint
+      shell: bash
+      run: |
+        set -euo pipefail
+        # parameters.valuesFiles is a space-separated list applied in order,
+        # lowest precedence first. Split in the shell: orun renders job
+        # templates with stdlib text/template and no funcmap, so there is no
+        # splitList to reach for.
+        VALUES_FLAGS=""
+        for vf in {{ .parameters.valuesFiles }}; do
+          test -f "${vf}" || { echo "values file not found: ${vf}" >&2; exit 1; }
+          VALUES_FLAGS="${VALUES_FLAGS} --values ${vf}"
+        done
+
+        helm lint "{{ .parameters.chartDir }}" --strict \
+          ${VALUES_FLAGS} \
+          --set "image.ref={{ .parameters.imageRepository }}:lint-placeholder"
+      onFailure: stop
+
+    # Rendering to a directory rather than to stdout is deliberate: the
+    # manifests become an artifact a sibling test component can assert
+    # invariants over (exactly one Ingress in the fleet, no `latest` tag, every
+    # ServiceAccount carrying an IRSA annotation). A pipeline into a validator
+    # proves only that the validator was happy.
+    - id: helm-template
+      name: helm-template
+      capability: helm-release.template
+      shell: bash
+      run: |
+        set -euo pipefail
+        out="{{ if .parameters.renderOut }}{{ .parameters.renderOut }}{{ else }}rendered/{{ .orun.environment.name }}{{ end }}"
+        rm -rf "${out}"
+        mkdir -p "${out}"
+
+        image_ref="${IMAGE_REF:-{{ .parameters.imageRepository }}:{{ .orun.environment.name }}-placeholder}"
+
+        # parameters.valuesFiles is a space-separated list applied in order,
+        # lowest precedence first. Split in the shell: orun renders job
+        # templates with stdlib text/template and no funcmap, so there is no
+        # splitList to reach for.
+        VALUES_FLAGS=""
+        for vf in {{ .parameters.valuesFiles }}; do
+          test -f "${vf}" || { echo "values file not found: ${vf}" >&2; exit 1; }
+          VALUES_FLAGS="${VALUES_FLAGS} --values ${vf}"
+        done
+
+        helm template "{{ .parameters.releaseName }}" "{{ .parameters.chartDir }}" \
+          --namespace "{{ .parameters.namespace }}" \
+          ${VALUES_FLAGS} \
+          --set "image.ref=${image_ref}" \
+          --output-dir "${out}"
+
+        echo "rendered $(find "${out}" -name '*.yaml' | wc -l) manifest(s) to ${out}"
+        {
+          printf 'HELM_RENDER_DIR=%s\n' "${out}"
+        } >> "$ORUN_ENV"
+      onFailure: stop
+
+    - id: kubeconform
+      name: kubeconform
+      capability: helm-release.validate
+      shell: bash
+      run: |
+        set -euo pipefail
+        version="{{ if .parameters.kubeconformVersion }}{{ .parameters.kubeconformVersion }}{{ else }}0.6.7{{ end }}"
+        curl -fsSL "https://github.com/yannh/kubeconform/releases/download/v${version}/kubeconform-linux-amd64.tar.gz" \
+          | tar -xz -C /usr/local/bin kubeconform
+
+        kubeconform \
+          -kubernetes-version "{{ if .parameters.kubernetesVersion }}{{ .parameters.kubernetesVersion }}{{ else }}1.31.0{{ end }}" \
+          -strict \
+          -summary \
+          -schema-location default \
+          -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{`{{.Group}}`}}/{{`{{.ResourceKind}}`}}_{{`{{.ResourceAPIVersion}}`}}.json' \
+          -ignore-missing-schemas=false \
+          "${HELM_RENDER_DIR}"
+      onFailure: stop
+
+    # A diff before the upgrade turns "the release succeeded" into "the release
+    # did what the reviewer expected". It is advisory — a missing plugin or a
+    # first install must not fail the lane.
+    - id: helm-diff
+      name: helm-diff
+      capability: helm-release.diff
+      shell: bash
+      run: |
+        set -euo pipefail
+        helm plugin install https://github.com/databus23/helm-diff --version v3.9.11 >/dev/null 2>&1 || true
+        # parameters.valuesFiles is a space-separated list applied in order,
+        # lowest precedence first. Split in the shell: orun renders job
+        # templates with stdlib text/template and no funcmap, so there is no
+        # splitList to reach for.
+        VALUES_FLAGS=""
+        for vf in {{ .parameters.valuesFiles }}; do
+          test -f "${vf}" || { echo "values file not found: ${vf}" >&2; exit 1; }
+          VALUES_FLAGS="${VALUES_FLAGS} --values ${vf}"
+        done
+
+        helm diff upgrade "{{ .parameters.releaseName }}" "{{ .parameters.chartDir }}" \
+          --namespace "{{ .parameters.namespace }}" \
+          ${VALUES_FLAGS} \
+          --set "image.ref=${IMAGE_REF}" \
+          --allow-unreleased --no-color || echo "helm-diff: advisory step, continuing"
+      onFailure: continue
+
+    # --atomic is what makes this safe to run unattended: a release that does
+    # not become ready inside the timeout rolls itself back rather than leaving
+    # a half-migrated fleet for someone to find.
+    - id: helm-upgrade
+      name: helm-upgrade
+      capability: helm-release.upgrade
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -n "${IMAGE_REF:-}" || {
+          echo "helm-upgrade: no IMAGE_REF — the container-image component must publish it before this release runs" >&2
+          exit 1
+        }
+        # parameters.valuesFiles is a space-separated list applied in order,
+        # lowest precedence first. Split in the shell: orun renders job
+        # templates with stdlib text/template and no funcmap, so there is no
+        # splitList to reach for.
+        VALUES_FLAGS=""
+        for vf in {{ .parameters.valuesFiles }}; do
+          test -f "${vf}" || { echo "values file not found: ${vf}" >&2; exit 1; }
+          VALUES_FLAGS="${VALUES_FLAGS} --values ${vf}"
+        done
+
+        helm upgrade --install "{{ .parameters.releaseName }}" "{{ .parameters.chartDir }}" \
+          --namespace "{{ .parameters.namespace }}" \
+          --create-namespace \
+          ${VALUES_FLAGS} \
+          --set "image.ref=${IMAGE_REF}" \
+          --atomic \
+          --wait \
+          --timeout "{{ if .parameters.rolloutTimeout }}{{ .parameters.rolloutTimeout }}{{ else }}10m{{ end }}" \
+          --history-max 10
+      onFailure: stop
+
+    - id: rollout-check
+      name: rollout-check
+      capability: helm-release.rollout
+      shell: bash
+      run: |
+        set -euo pipefail
+        kubectl -n "{{ .parameters.namespace }}" rollout status \
+          "deployment/{{ .parameters.releaseName }}" \
+          --timeout "{{ if .parameters.rolloutTimeout }}{{ .parameters.rolloutTimeout }}{{ else }}10m{{ end }}"
+        kubectl -n "{{ .parameters.namespace }}" get pods \
+          -l "app.kubernetes.io/instance={{ .parameters.releaseName }}" -o wide
+      onFailure: stop

@@ -1,0 +1,19 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: terraform-aws-local
+spec:
+  description: >-
+    Local developer lane — uses ambient AWS credentials from the developer's
+    environment rather than assuming a CI role, and stops at plan.
+
+  jobs:
+    terraform:
+      includeCapabilities:
+        - terraform-aws.setup
+        - terraform-aws.env
+        - terraform-aws.context
+        - terraform-aws.fmt
+        - terraform-aws.init
+        - terraform-aws.validate
+        - terraform-aws.plan

@@ -1,0 +1,178 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: JobTemplate
+metadata:
+  name: container-image-build
+spec:
+  description: BuildKit build, Trivy scan, and digest-addressed push to ECR
+  runsOn: ubuntu-22.04
+  timeout: 30m
+  retries: 0
+
+  labels:
+    scope: delivery
+
+  capabilities:
+    - container-image.setup-buildx
+    - container-image.oidc
+    - container-image.ecr-login
+    - container-image.tag
+    - container-image.build
+    - container-image.scan
+    - container-image.push
+    - container-image.output
+
+  steps:
+    - id: setup-buildx
+      name: setup-buildx
+      capability: container-image.setup-buildx
+      use: docker/setup-buildx-action@v3
+
+    - id: assume-aws-role
+      name: assume-aws-role
+      capability: container-image.oidc
+      use: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: "{{ .parameters.awsRoleArn }}"
+        aws-region: "{{ .parameters.awsRegion }}"
+        role-session-name: "orun-image-{{ .orun.component.name }}-{{ .orun.environment.name }}"
+
+    - id: ecr-login
+      name: ecr-login
+      capability: container-image.ecr-login
+      use: aws-actions/amazon-ecr-login@v2
+
+    # An immutable tag, computed once and used by every later step. The commit
+    # sha is what makes it immutable: a rebuild of the same source produces the
+    # same tag, and a different source cannot reuse one. `latest` is never
+    # written — a rendered manifest that says `latest` cannot tell you what is
+    # running.
+    - id: compute-tag
+      name: compute-tag
+      capability: container-image.tag
+      shell: bash
+      run: |
+        set -euo pipefail
+        short_sha="$(git rev-parse --short=12 HEAD)"
+        tag="{{ .orun.environment.name }}-${short_sha}"
+        {
+          printf 'IMAGE_TAG=%s\n' "$tag"
+          printf 'IMAGE_NAME=%s\n' "{{ .parameters.imageName }}"
+        } >> "$ORUN_ENV"
+        echo "image tag: $tag"
+      onFailure: stop
+
+    # Verify lanes build to the local daemon so the scan has something to read;
+    # publish lanes rebuild with --push. The build is cached either way, so the
+    # publish lane does not pay for the verify lane's work twice.
+    - id: build-image
+      name: build-image
+      capability: container-image.build
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # parameters.buildArgs is a space-separated KEY=VALUE list. Assembling
+        # the flags here rather than in the template keeps the contract to
+        # template features we have actually verified.
+        BUILD_ARG_FLAGS=""
+        for arg in {{ .parameters.buildArgs }}; do
+          BUILD_ARG_FLAGS="${BUILD_ARG_FLAGS} --build-arg ${arg}"
+        done
+
+        docker buildx build \
+          --file "{{ .parameters.dockerfile }}" \
+          --platform "{{ if .parameters.platforms }}{{ .parameters.platforms }}{{ else }}linux/amd64{{ end }}" \
+          --tag "${IMAGE_NAME}:${IMAGE_TAG}" \
+          --cache-from "type=gha,scope={{ .orun.component.name }}" \
+          --cache-to "type=gha,mode=max,scope={{ .orun.component.name }}" \
+          --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+          --label "org.opencontainers.image.source=https://github.com/{{ .parameters.owner }}/{{ .parameters.repo }}" \
+          --label "io.orun.component={{ .orun.component.name }}" \
+          --label "io.orun.environment={{ .orun.environment.name }}" \
+          --load \
+          ${BUILD_ARG_FLAGS} \
+          "{{ .parameters.buildContext }}"
+      onFailure: stop
+
+    # The scan gates the push, not the other way round. A vulnerable image that
+    # reached the registry is already a supply-chain problem even if nothing
+    # deploys it.
+    - id: scan-image
+      name: scan-image
+      capability: container-image.scan
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v "${HOME}/.cache/trivy:/root/.cache/trivy" \
+          aquasec/trivy:0.58.1 image \
+            --exit-code 1 \
+            --severity "{{ if .parameters.scanSeverity }}{{ .parameters.scanSeverity }}{{ else }}CRITICAL,HIGH{{ end }}" \
+            {{ if eq .parameters.scanIgnoreUnfixed "true" }}--ignore-unfixed{{ end }} \
+            --no-progress \
+            "${IMAGE_NAME}:${IMAGE_TAG}"
+      onFailure: stop
+
+    - id: push-image
+      name: push-image
+      capability: container-image.push
+      shell: bash
+      run: |
+        set -euo pipefail
+        : "${IMAGE_REGISTRY:={{ .parameters.registry }}}"
+        test -n "${IMAGE_REGISTRY}" || {
+          echo "push-image: no registry — expected parameters.registry or the IMAGE_REGISTRY secretEnv published by the service's terraform root" >&2
+          exit 1
+        }
+        remote="${IMAGE_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+        docker tag "${IMAGE_NAME}:${IMAGE_TAG}" "${remote}"
+
+        # The digest is read off the push output rather than `docker inspect
+        # --format`: that format string is itself a Go template, and this file
+        # is rendered by one. Nesting them makes the job template unrenderable.
+        push_log="$(mktemp)"
+        docker push "${remote}" | tee "${push_log}"
+        digest="$(awk '/digest: sha256:/ { for (i = 1; i <= NF; i++) if ($i ~ /^sha256:/) print $i }' "${push_log}" | tail -n1)"
+        rm -f "${push_log}"
+        test -n "${digest}" || {
+          echo "push-image: could not read the pushed digest from the push output" >&2
+          exit 1
+        }
+        {
+          printf 'IMAGE_DIGEST=%s\n' "${digest}"
+          printf 'IMAGE_REF=%s\n' "${IMAGE_REGISTRY}/${IMAGE_NAME}@${digest}"
+        } >> "$ORUN_ENV"
+        echo "pushed ${remote} (${digest})"
+      onFailure: stop
+
+    # Publish the coordinates the Helm release needs. Same lease-bound channel
+    # the terraform composition uses for its outputs, so a chart consumes an
+    # image the same way it consumes a bucket name.
+    - id: publish-outputs
+      name: publish-outputs
+      capability: container-image.output
+      shell: bash
+      run: |
+        set -euo pipefail
+        {{- if .parameters.imageOutputs }}
+        for pair in $(echo "{{ .parameters.imageOutputs }}" | tr ',' ' '); do
+          key="${pair%%=*}"
+          field="${pair#*=}"
+          case "$field" in
+            digest) value="${IMAGE_DIGEST}" ;;
+            tag)    value="${IMAGE_TAG}" ;;
+            ref)    value="${IMAGE_REF}" ;;
+            *) echo "publish-outputs: unknown field '$field' (want digest|tag|ref)" >&2; exit 1 ;;
+          esac
+          {
+            printf '%s<<__ORUN_EOF__\n' "$key"
+            printf '%s\n' "$value"
+            printf '__ORUN_EOF__\n'
+          } >> "${ORUN_SECRET_OUTPUTS:?runner did not provide the secret-outputs sink}"
+          echo "queued image output $key ← $field"
+        done
+        {{- else }}
+        echo "publish-outputs: no imageOutputs declared; skipping."
+        {{- end }}
+      onFailure: stop

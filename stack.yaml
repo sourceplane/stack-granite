@@ -1,0 +1,22 @@
+apiVersion: orun.io/v1
+kind: Stack
+metadata:
+  name: stack-granite
+  title: Stack Granite
+  version: 0.1.0
+  description: Versioned OCI-hosted catalog of Terraform-on-AWS, container-image, Helm-release and Node service compositions for Sourceplane Kubernetes repositories.
+  owner: sourceplane
+  tags:
+    - terraform
+    - aws
+    - eks
+    - kubernetes
+    - helm
+    - docker
+    - platform
+    - catalog
+registry:
+  host: ghcr.io
+  namespace: sourceplane
+  repository: stack-granite
+  visibility: public

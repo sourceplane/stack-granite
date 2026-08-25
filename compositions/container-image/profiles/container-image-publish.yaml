@@ -1,0 +1,21 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: container-image-publish
+spec:
+  description: Build, scan, push to ECR by digest, and publish the coordinates downstream
+
+  policies:
+    requireCleanGitTree: true
+
+  jobs:
+    image:
+      includeCapabilities:
+        - container-image.setup-buildx
+        - container-image.oidc
+        - container-image.ecr-login
+        - container-image.tag
+        - container-image.build
+        - container-image.scan
+        - container-image.push
+        - container-image.output

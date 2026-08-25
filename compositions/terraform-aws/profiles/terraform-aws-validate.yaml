@@ -1,0 +1,22 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: terraform-aws-validate
+spec:
+  description: >-
+    Credential-free structural validation. Downloads providers, typechecks the
+    configuration, and touches neither AWS nor remote state.
+
+  # No secretBindings, and the OIDC capability is excluded — this lane cannot
+  # authenticate even if a component supplies awsRoleArn. That is the point:
+  # the PR lane on a fork, or on a repo with no AWS account at all, still
+  # proves the Terraform is well-formed.
+  jobs:
+    terraform:
+      includeCapabilities:
+        - terraform-aws.setup
+        - terraform-aws.env
+        - terraform-aws.context
+        - terraform-aws.fmt
+        - terraform-aws.init-offline
+        - terraform-aws.validate

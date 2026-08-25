@@ -1,0 +1,26 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: Composition
+metadata:
+  name: helm-release
+spec:
+  type: helm-release
+  description: Lint, render, validate and roll a Helm release onto an EKS cluster
+
+  schemaRef:
+    name: helm-release-component
+
+  defaultJob: release
+  defaultProfile: lint
+
+  jobs:
+    - name: release
+      templateRef:
+        name: helm-release-run
+
+  profiles:
+    - name: lint
+      profileRef:
+        name: helm-release-lint
+    - name: deploy
+      profileRef:
+        name: helm-release-deploy

@@ -1,0 +1,68 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ComponentSchema
+metadata:
+  name: helm-release-component
+spec:
+  type: helm-release
+  schema:
+    $schema: http://json-schema.org/draft-07/schema#
+    title: Helm Release Component
+    type: object
+    required:
+      - name
+      - type
+      - parameters
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+        const: helm-release
+      parameters:
+        type: object
+        required:
+          - chartDir
+          - releaseName
+          - namespace
+          - helmVersion
+        properties:
+          chartDir:
+            type: string
+            description: Path to the chart directory, relative to the component directory.
+          releaseName:
+            type: string
+          namespace:
+            type: string
+            description: Target namespace. Created with --create-namespace on first install.
+          helmVersion:
+            type: string
+            description: Exact Helm version to install.
+          kubeconformVersion:
+            type: string
+            description: Exact kubeconform version used to schema-validate rendered manifests.
+          kubernetesVersion:
+            type: string
+            description: Kubernetes API version rendered manifests are validated against (e.g. "1.31.0").
+          valuesFiles:
+            type: string
+            description: >-
+              Space-separated values files applied in order, lowest precedence
+              first. Environment overlays belong here, never in the chart.
+          imageRepository:
+            type: string
+            description: Fully-qualified repository the release pulls from. Usually supplied by the container-image component's published output.
+          clusterName:
+            type: string
+            description: EKS cluster name for `aws eks update-kubeconfig`. Absent in lint lanes, which never reach a cluster.
+          awsRegion:
+            type: string
+          awsRoleArn:
+            type: string
+          rolloutTimeout:
+            type: string
+            description: Timeout for --wait and the rollout check (default 10m).
+          renderOut:
+            type: string
+            description: Directory the rendered manifests are written to, so a sibling test component can assert on them.
+        additionalProperties: true
+    additionalProperties: true

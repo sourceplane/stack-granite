@@ -1,0 +1,26 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: Composition
+metadata:
+  name: container-image
+spec:
+  type: container-image
+  description: Build, scan and publish a service container image to ECR by digest
+
+  schemaRef:
+    name: container-image-component
+
+  defaultJob: image
+  defaultProfile: verify
+
+  jobs:
+    - name: image
+      templateRef:
+        name: container-image-build
+
+  profiles:
+    - name: verify
+      profileRef:
+        name: container-image-verify
+    - name: publish
+      profileRef:
+        name: container-image-publish

@@ -1,0 +1,68 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ComponentSchema
+metadata:
+  name: container-image-component
+spec:
+  type: container-image
+  schema:
+    $schema: http://json-schema.org/draft-07/schema#
+    title: Container Image Component
+    type: object
+    required:
+      - name
+      - type
+      - parameters
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+        const: container-image
+      parameters:
+        type: object
+        required:
+          - imageName
+          - dockerfile
+          - buildContext
+        properties:
+          imageName:
+            type: string
+            description: Repository name within the registry (e.g. "documents-service"), without host or tag.
+          dockerfile:
+            type: string
+            description: Path to the Dockerfile, relative to the component directory.
+          buildContext:
+            type: string
+            description: Build context directory, relative to the component directory. Usually the workspace root for a monorepo build.
+          buildArgs:
+            type: string
+            description: Newline-separated KEY=VALUE build arguments.
+          platforms:
+            type: string
+            description: Comma-separated target platforms (default linux/amd64).
+          awsRegion:
+            type: string
+          awsRoleArn:
+            type: string
+            description: IAM role assumed via GitHub OIDC for the ECR login. Absent in verify lanes, which never push.
+          registry:
+            type: string
+            description: >-
+              ECR registry host (<account>.dkr.ecr.<region>.amazonaws.com).
+              Resolved at deploy time from the service's Terraform outputs, not
+              committed — an account id in a component file is an instantiation
+              blocker.
+          scanSeverity:
+            type: string
+            description: Comma-separated Trivy severities that fail the build (default CRITICAL,HIGH).
+          scanIgnoreUnfixed:
+            type: string
+            description: '"true" to ignore vulnerabilities with no available fix.'
+          imageOutputs:
+            type: string
+            description: >-
+              Comma-separated KEY=field pairs published onto the environment
+              rung after a successful push, for the helm-release component to
+              consume through secretEnv. Fields: digest, tag, ref.
+        additionalProperties: true
+    additionalProperties: true

@@ -1,0 +1,16 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: helm-release-lint
+spec:
+  description: >-
+    Lint, render and schema-validate the chart without a cluster. The rendered
+    manifests are left on disk for invariant tests to assert over.
+
+  jobs:
+    release:
+      includeCapabilities:
+        - helm-release.setup
+        - helm-release.lint
+        - helm-release.template
+        - helm-release.validate

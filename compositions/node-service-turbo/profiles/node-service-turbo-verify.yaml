@@ -1,0 +1,18 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: node-service-turbo-verify
+spec:
+  description: Typecheck, lint, unit-test and build the service. No containers, no cloud.
+
+  jobs:
+    verify:
+      includeCapabilities:
+        - node-service-turbo.setup-pnpm
+        - node-service-turbo.setup-node
+        - node-service-turbo.install
+        - node-service-turbo.verify-structure
+        - node-service-turbo.typecheck
+        - node-service-turbo.lint
+        - node-service-turbo.test
+        - node-service-turbo.build

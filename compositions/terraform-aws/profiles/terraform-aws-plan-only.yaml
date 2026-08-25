@@ -1,0 +1,23 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: ExecutionProfile
+metadata:
+  name: terraform-aws-plan-only
+spec:
+  description: >-
+    Read-only lane against real AWS and real state — the PR lane for an
+    environment that has an account. Produces a plan; never applies it.
+
+  secretBindings:
+    AWS_ACCOUNT_ID: { required: false }
+
+  jobs:
+    terraform:
+      includeCapabilities:
+        - terraform-aws.setup
+        - terraform-aws.oidc
+        - terraform-aws.env
+        - terraform-aws.context
+        - terraform-aws.fmt
+        - terraform-aws.init
+        - terraform-aws.validate
+        - terraform-aws.plan

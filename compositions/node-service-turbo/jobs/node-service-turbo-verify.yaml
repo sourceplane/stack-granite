@@ -1,0 +1,114 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: JobTemplate
+metadata:
+  name: node-service-turbo-verify
+spec:
+  description: Workspace install and per-service typecheck, lint, test, build, and compose smoke
+  runsOn: ubuntu-22.04
+  timeout: 30m
+  retries: 0
+
+  labels:
+    scope: verify
+
+  capabilities:
+    - node-service-turbo.setup-pnpm
+    - node-service-turbo.setup-node
+    - node-service-turbo.install
+    - node-service-turbo.verify-structure
+    - node-service-turbo.typecheck
+    - node-service-turbo.lint
+    - node-service-turbo.test
+    - node-service-turbo.build
+    - node-service-turbo.smoke
+
+  steps:
+    # setup-pnpm before setup-node so setup-node can warm and persist the pnpm
+    # store cache, keyed on the workspace lockfile.
+    - id: setup-pnpm
+      name: setup-pnpm
+      capability: node-service-turbo.setup-pnpm
+      use: pnpm/action-setup@v4
+      with:
+        version: "{{ .parameters.pnpmVersion }}"
+
+    - id: setup-node
+      name: setup-node
+      capability: node-service-turbo.setup-node
+      use: actions/setup-node@v6
+      with:
+        node-version: "{{ .parameters.nodeVersion }}"
+        cache: pnpm
+        cache-dependency-path: "**/pnpm-lock.yaml"
+
+    - id: install-workspace-dependencies
+      name: install-workspace-dependencies
+      capability: node-service-turbo.install
+      shell: bash
+      run: "{{ if .parameters.installCommand }}{{ .parameters.installCommand }}{{ else }}pnpm install --frozen-lockfile{{ end }}"
+      onFailure: stop
+
+    # A service is only deployable if it has a Dockerfile beside it. Catching
+    # that here, in the cheap lane, beats discovering it when the image
+    # component runs twenty minutes later.
+    - id: verify-service-structure
+      name: verify-service-structure
+      capability: node-service-turbo.verify-structure
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -f package.json
+        test -f Dockerfile || {
+          echo "verify-service-structure: no Dockerfile — a node-service-turbo component must be containerizable" >&2
+          exit 1
+        }
+      onFailure: stop
+
+    - id: typecheck-service
+      name: typecheck-service
+      capability: node-service-turbo.typecheck
+      shell: bash
+      run: "{{ if .parameters.typecheckCommand }}{{ .parameters.typecheckCommand }}{{ else }}pnpm exec turbo run typecheck --filter={{ .parameters.turboFilter }}{{ end }}"
+      onFailure: stop
+
+    - id: lint-service
+      name: lint-service
+      capability: node-service-turbo.lint
+      shell: bash
+      run: "{{ if .parameters.lintCommand }}{{ .parameters.lintCommand }}{{ else }}pnpm exec turbo run lint --filter={{ .parameters.turboFilter }}{{ end }}"
+      onFailure: stop
+
+    - id: test-service
+      name: test-service
+      capability: node-service-turbo.test
+      shell: bash
+      run: "{{ if .parameters.testCommand }}{{ .parameters.testCommand }}{{ else }}pnpm exec turbo run test --filter={{ .parameters.turboFilter }}{{ end }}"
+      onFailure: stop
+
+    - id: build-service
+      name: build-service
+      capability: node-service-turbo.build
+      shell: bash
+      run: "{{ if .parameters.buildCommand }}{{ .parameters.buildCommand }}{{ else }}pnpm exec turbo run build --filter={{ .parameters.turboFilter }}{{ end }}"
+      onFailure: stop
+
+    # The smoke lane runs the built service against local doubles (LocalStack,
+    # Redis, Postgres) over docker-compose. It exercises the wiring unit tests
+    # mock away — that the service can actually reach its dependencies and that
+    # a degraded dependency degrades rather than fails.
+    - id: smoke-service
+      name: smoke-service
+      capability: node-service-turbo.smoke
+      shell: bash
+      run: |
+        set -euo pipefail
+        {{- if .parameters.smokeCommand }}
+        compose="{{ if .parameters.smokeComposeFile }}{{ .parameters.smokeComposeFile }}{{ else }}docker-compose.yml{{ end }}"
+        cleanup() { docker compose -f "${compose}" logs --no-color || true; docker compose -f "${compose}" down -v || true; }
+        trap cleanup EXIT
+        docker compose -f "${compose}" up -d --build --wait
+        {{ .parameters.smokeCommand }}
+        {{- else }}
+        echo "smoke-service: no smokeCommand configured; skipping."
+        {{- end }}
+      onFailure: stop

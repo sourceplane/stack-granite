@@ -1,0 +1,35 @@
+apiVersion: sourceplane.io/v1alpha1
+kind: Composition
+metadata:
+  name: terraform-aws
+spec:
+  type: terraform-aws
+  description: Terraform for AWS estates — credential-free validation, OIDC-assumed plan and apply
+
+  schemaRef:
+    name: terraform-aws-component
+
+  defaultJob: terraform
+  defaultProfile: validate
+
+  jobs:
+    - name: terraform
+      templateRef:
+        name: terraform-aws-run
+
+  profiles:
+    # validate is the DEFAULT on purpose. A composition whose default reaches
+    # for cloud credentials makes every mis-subscribed component an outage
+    # waiting for a trigger; the safe lane must be the one you get by omission.
+    - name: validate
+      profileRef:
+        name: terraform-aws-validate
+    - name: plan-only
+      profileRef:
+        name: terraform-aws-plan-only
+    - name: apply
+      profileRef:
+        name: terraform-aws-apply
+    - name: local
+      profileRef:
+        name: terraform-aws-local

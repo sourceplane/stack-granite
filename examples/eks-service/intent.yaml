@@ -1,0 +1,80 @@
+apiVersion: sourceplane.io/v1
+kind: Intent
+
+metadata:
+  name: eks-service-example
+  description: One service on EKS — terraform deps, code lane, image, release
+
+compositions:
+  sources:
+    - name: stack-granite
+      kind: oci
+      ref: oci://ghcr.io/sourceplane/stack-granite:0.1.0
+  resolution:
+    precedence:
+      - stack-granite
+    bindings:
+      terraform-aws: stack-granite
+      container-image: stack-granite
+      helm-release: stack-granite
+      node-service-turbo: stack-granite
+      turbo-package: stack-granite
+
+discovery:
+  roots:
+    - apps/
+    - infra/
+    - packages/
+
+automation:
+  triggerBindings:
+    github-pull-request:
+      description: Pull request validation
+      on:
+        provider: github
+        event: pull_request
+        actions: [opened, synchronize, reopened, ready_for_review]
+        baseBranches: [main]
+      plan:
+        scope: changed
+        base: pull_request.base.sha
+        head: pull_request.head.sha
+
+    github-push-main:
+      description: Stack convergence after merge
+      on:
+        provider: github
+        event: push
+        branches: [main]
+
+environments:
+  # dev is the credential-free lane: it exists to prove every component is
+  # well-formed on a repo that may have no AWS account at all.
+  dev:
+    activation:
+      triggerRefs: [github-pull-request, github-push-main]
+    parameterDefaults:
+      terraform-aws:
+        lane: verify
+        namespacePrefix: dev-
+
+  stage:
+    activation:
+      triggerRefs: [github-pull-request, github-push-main]
+    parameterDefaults:
+      terraform-aws:
+        lane: deploy
+        namespacePrefix: stg-
+        awsRegion: ap-southeast-1
+
+  prod:
+    activation:
+      triggerRefs: [github-pull-request, github-push-main]
+    promotion:
+      dependsOn:
+        - environment: stage
+    parameterDefaults:
+      terraform-aws:
+        lane: deploy
+        namespacePrefix: prod-
+        awsRegion: ap-southeast-1
